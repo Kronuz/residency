@@ -13,6 +13,9 @@ on [task](https://github.com/Kronuz/task) and [hashes](https://github.com/Kronuz
 - `residency::pinned::copy(file, range, crc32c)`: copies a region into owned memory
   and verifies its CRC-32C, throwing on a mismatch. For structures that must never
   fault or be read corrupt: term indexes, skip data, document lengths.
+- `residency::verified_regions(bytes, regions)`: checksummed regions of mapped bytes;
+  `verify(range)` checks each region it overlaps the first time any read touches it
+  (one atomic state per region) and returns false on a mismatch, then and after.
 - `residency::backend`: the concept every backend implements,
   `task::task<void> prefetch(const file&, std::span<const range>)`.
 - `residency::sync_backend`: advises the kernel (`madvise(MADV_WILLNEED)`) and returns

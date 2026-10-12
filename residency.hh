@@ -27,6 +27,9 @@
 //   prefetch  co_await backend.prefetch(file, ranges): the ranges are resident after
 //   pinned    a small region copied into owned memory and checksum-verified, for hot
 //             structures that must never fault (term indexes, skip data, lengths)
+//   verified_regions
+//             checksummed regions of a file, each verified the first time a read
+//             touches it
 //
 // Backends implement prefetch; this header ships the synchronous one, which advises
 // the kernel and returns without suspending.
@@ -37,10 +40,12 @@
 #include "task.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -144,6 +149,61 @@ public:
 
 private:
 	std::vector<std::byte> bytes_;
+};
+
+// Checksummed regions of mapped bytes, each verified against its CRC-32C the first time a
+// read touches it. One atomic state per region; threads that touch an unverified region at
+// once may both verify it, which is harmless. Bytes outside every region are unchecked.
+class verified_regions {
+public:
+	struct region {
+		std::uint64_t offset = 0, length = 0;
+		std::uint32_t crc32c = 0;
+	};
+
+	verified_regions() = default;
+	// regions must be sorted by offset and must not overlap.
+	verified_regions(std::span<const std::byte> bytes, std::vector<region> regions)
+		: bytes_(bytes), regions_(std::move(regions)), state_(new std::atomic<std::uint8_t>[regions_.size()]) {
+		for (std::size_t i = 0; i < regions_.size(); ++i) {
+			const auto& r = regions_[i];
+			if (r.offset > bytes.size() || r.length > bytes.size() - r.offset || (i && r.offset < regions_[i - 1].offset + regions_[i - 1].length)) {
+				throw std::invalid_argument("residency: region out of bounds or overlapping");
+			}
+			state_[i].store(unknown, std::memory_order_relaxed);
+		}
+	}
+
+	// Verifies every region overlapping r that is not verified yet; false when one does not
+	// match its checksum (and stays false for it on every later call).
+	bool verify(range r) noexcept {
+		if (!r.length) { return true; }
+		auto it = std::upper_bound(regions_.begin(), regions_.end(), r.offset, [](std::uint64_t at, const region& g) { return at < g.offset + g.length; });
+		for (std::size_t i = std::size_t(it - regions_.begin()); i < regions_.size() && regions_[i].offset < r.offset + r.length; ++i) {
+			std::uint8_t s = state_[i].load(std::memory_order_acquire);
+			if (s == unknown) {
+				const auto& g = regions_[i];
+				s = hashes::crc32c(bytes_.data() + g.offset, g.length) == g.crc32c ? good : bad;
+				state_[i].store(s, std::memory_order_release);
+			}
+			if (s == bad) { return false; }
+		}
+		return true;
+	}
+
+	std::size_t size() const noexcept { return regions_.size(); }
+	// How many regions have been verified good.
+	std::size_t verified() const noexcept {
+		std::size_t n = 0;
+		for (std::size_t i = 0; i < regions_.size(); ++i) { n += state_[i].load(std::memory_order_relaxed) == good; }
+		return n;
+	}
+
+private:
+	static constexpr std::uint8_t unknown = 0, good = 1, bad = 2;
+	std::span<const std::byte> bytes_;
+	std::vector<region> regions_;
+	std::unique_ptr<std::atomic<std::uint8_t>[]> state_;
 };
 
 // A backend makes ranges resident: after co_await b.prefetch(f, ranges), reading

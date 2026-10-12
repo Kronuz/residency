@@ -53,6 +53,31 @@ int main() {
 	for (const auto& r : ranges) { for (std::uint64_t i = 0; i < r.length; ++i) { want += data[r.offset + i]; } }
 	CHECK(task::run(s, sum_after_prefetch(backend, f, ranges)) == want);
 
+	// Regions verify on first touch; a corrupted region stays bad.
+	{
+		std::vector<std::byte> bytes(reinterpret_cast<const std::byte*>(data.data()), reinterpret_cast<const std::byte*>(data.data()) + data.size());
+		std::vector<residency::verified_regions::region> regions;
+		for (std::uint64_t at = 0; at < 300000; at += 65536) {
+			const std::uint64_t n = std::min<std::uint64_t>(65536, 300000 - at);
+			regions.push_back({at, n, hashes::crc32c(bytes.data() + at, n)});
+		}
+		bytes[200000] ^= std::byte{1};  // region 3 (196608..262143)
+		residency::verified_regions v(bytes, regions);
+		CHECK(v.size() == 5 && v.verified() == 0);
+		CHECK(v.verify({0, 10}));
+		CHECK(v.verified() == 1);
+		CHECK(v.verify({65530, 20}));  // spans regions 0 and 1
+		CHECK(v.verified() == 2);
+		CHECK(!v.verify({100000, 150000}));  // reaches the corrupted region
+		CHECK(!v.verify({200000, 1}));
+		CHECK(v.verify({262144, 1000}));     // region 4 is fine
+		CHECK(v.verify({400000, 100}));      // outside every region: unchecked
+		CHECK(v.verify({0, 0}));
+		threw = false;
+		try { residency::verified_regions bad(bytes, {{0, 10, 0}, {5, 10, 0}}); } catch (const std::invalid_argument&) { threw = true; }
+		CHECK(threw);
+	}
+
 	auto moved = std::move(f);
 	CHECK(moved.size() == data.size());
 	CHECK(f.size() == 0);
