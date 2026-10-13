@@ -93,6 +93,50 @@ int main() {
 		try { residency::verified_regions wrong(bytes, std::vector<residency::verified_regions::span>{{0, 100000, 12, {1, 2}}}); } catch (const std::invalid_argument&) { threw = true; }
 		CHECK(threw);  // the wrong number of checksums
 	}
+	// Against a model: small regions in spans that start mid-word, random corruptions and
+	// ranges; regions are visited in order and verification stops at the first bad one.
+	{
+		std::mt19937_64 r(7);
+		for (int round = 0; round < 50; ++round) {
+			std::vector<std::byte> bytes(60000);
+			for (auto& b : bytes) { b = std::byte(r()); }
+			struct model_region { std::uint64_t at, n; bool corrupt, seen = false; };
+			std::vector<residency::verified_regions::span> spans;
+			std::vector<model_region> model;
+			for (std::uint64_t at = r() % 100; at < bytes.size() - 1000;) {
+				const std::uint8_t shift = std::uint8_t(4 + r() % 4);
+				const std::uint64_t len = std::min<std::uint64_t>(1 + r() % 5000, bytes.size() - at);
+				residency::verified_regions::span sp{at, len, shift, {}};
+				for (std::uint64_t o = 0; o < len; o += std::uint64_t(1) << shift) {
+					const std::uint64_t n = std::min<std::uint64_t>(std::uint64_t(1) << shift, len - o);
+					sp.crcs.push_back(hashes::crc32c(bytes.data() + at + o, n));
+					model.push_back({at + o, n, r() % 40 == 0});
+				}
+				spans.push_back(std::move(sp));
+				at += len + r() % 50;
+			}
+			for (const auto& m : model) {
+				if (m.corrupt) { bytes[m.at + r() % m.n] ^= std::byte{0x80}; }
+			}
+			residency::verified_regions v(bytes, spans);
+			for (int q = 0; q < 300; ++q) {
+				const std::uint64_t at = r() % bytes.size(), len = r() % 3000;
+				bool want = true;
+				for (auto& m : model) {
+					if (m.at + m.n <= at || m.at >= at + len || !len) { continue; }
+					if (m.corrupt) {
+						want = false;
+						break;
+					}
+					m.seen = true;
+				}
+				CHECK(v.verify({at, len}) == want);
+				std::size_t seen = 0;
+				for (const auto& m : model) { seen += m.seen; }
+				CHECK(v.verified() == seen);
+			}
+		}
+	}
 
 	auto moved = std::move(f);
 	CHECK(moved.size() == data.size());
