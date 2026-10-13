@@ -74,8 +74,24 @@ int main() {
 		CHECK(v.verify({400000, 100}));      // outside every region: unchecked
 		CHECK(v.verify({0, 0}));
 		threw = false;
-		try { residency::verified_regions bad(bytes, {{0, 10, 0}, {5, 10, 0}}); } catch (const std::invalid_argument&) { threw = true; }
+		try { residency::verified_regions bad(bytes, std::vector<residency::verified_regions::region>{{0, 10, 0}, {5, 10, 0}}); } catch (const std::invalid_argument&) { threw = true; }
 		CHECK(threw);
+		// The same bytes as spans of equal regions: one span of 4 KiB regions, one of 64 KiB.
+		std::vector<std::uint32_t> small, large;
+		bytes[200000] ^= std::byte{1};  // checksums of the good bytes
+		for (std::uint64_t at = 0; at < 100000; at += 4096) { small.push_back(hashes::crc32c(bytes.data() + at, std::min<std::uint64_t>(4096, 100000 - at))); }
+		for (std::uint64_t at = 100000; at < 300000; at += 65536) { large.push_back(hashes::crc32c(bytes.data() + at, std::min<std::uint64_t>(65536, 300000 - at))); }
+		bytes[200000] ^= std::byte{1};  // then corrupted again
+		residency::verified_regions s(bytes, std::vector<residency::verified_regions::span>{{0, 100000, 12, small}, {100000, 200000, 16, large}});
+		CHECK(s.size() == small.size() + large.size() && s.verified() == 0);
+		CHECK(s.verify({5000, 100}) && s.verified() == 1);       // one 4 KiB region only
+		CHECK(s.verify({8000, 10000}) && s.verified() == 4);     // regions 2-4 join region 1
+		CHECK(s.verify({99990, 20}));                             // across the two spans
+		CHECK(!s.verify({190000, 20000}));                        // the corrupted byte at 200000
+		CHECK(s.verify({100000, 10}));                            // the large span's first region is fine
+		threw = false;
+		try { residency::verified_regions wrong(bytes, std::vector<residency::verified_regions::span>{{0, 100000, 12, {1, 2}}}); } catch (const std::invalid_argument&) { threw = true; }
+		CHECK(threw);  // the wrong number of checksums
 	}
 
 	auto moved = std::move(f);

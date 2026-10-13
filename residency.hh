@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -160,50 +161,82 @@ public:
 		std::uint64_t offset = 0, length = 0;
 		std::uint32_t crc32c = 0;
 	};
+	// A span of equal regions: [offset, offset + length) in regions of 2^shift bytes (the
+	// last may be shorter), one CRC-32C each. About five bytes per region in memory.
+	struct span {
+		std::uint64_t offset = 0, length = 0;
+		std::uint8_t shift = 16;
+		std::vector<std::uint32_t> crcs;
+	};
 
 	verified_regions() = default;
-	// regions must be sorted by offset and must not overlap.
-	verified_regions(std::span<const std::byte> bytes, std::vector<region> regions)
-		: bytes_(bytes), regions_(std::move(regions)), state_(new std::atomic<std::uint8_t>[regions_.size()]) {
-		for (std::size_t i = 0; i < regions_.size(); ++i) {
-			const auto& r = regions_[i];
-			if (r.offset > bytes.size() || r.length > bytes.size() - r.offset || (i && r.offset < regions_[i - 1].offset + regions_[i - 1].length)) {
-				throw std::invalid_argument("residency: region out of bounds or overlapping");
+	// spans must be sorted by offset and must not overlap; each needs exactly one CRC per
+	// region.
+	verified_regions(std::span<const std::byte> bytes, std::vector<span> spans) : bytes_(bytes), spans_(std::move(spans)) {
+		std::size_t total = 0;
+		for (std::size_t i = 0; i < spans_.size(); ++i) {
+			const auto& s = spans_[i];
+			if (s.offset > bytes.size() || s.length > bytes.size() - s.offset || (i && s.offset < spans_[i - 1].offset + spans_[i - 1].length) || s.shift > 40 ||
+				s.crcs.size() != std::size_t((s.length + (std::uint64_t(1) << s.shift) - 1) >> s.shift)) {
+				throw std::invalid_argument("residency: span out of bounds, overlapping, or with the wrong number of checksums");
 			}
-			state_[i].store(unknown, std::memory_order_relaxed);
+			first_.push_back(total);
+			total += s.crcs.size();
 		}
+		state_.reset(new std::atomic<std::uint8_t>[total]);
+		for (std::size_t i = 0; i < total; ++i) { state_[i].store(unknown, std::memory_order_relaxed); }
+		count_ = total;
 	}
+	// Arbitrary regions: each becomes a span of one region.
+	verified_regions(std::span<const std::byte> bytes, std::vector<region> regions) : verified_regions(bytes, as_spans(regions)) {}
 
 	// Verifies every region overlapping r that is not verified yet; false when one does not
 	// match its checksum (and stays false for it on every later call).
 	bool verify(range r) noexcept {
 		if (!r.length) { return true; }
-		auto it = std::upper_bound(regions_.begin(), regions_.end(), r.offset, [](std::uint64_t at, const region& g) { return at < g.offset + g.length; });
-		for (std::size_t i = std::size_t(it - regions_.begin()); i < regions_.size() && regions_[i].offset < r.offset + r.length; ++i) {
-			std::uint8_t s = state_[i].load(std::memory_order_acquire);
-			if (s == unknown) {
-				const auto& g = regions_[i];
-				s = hashes::crc32c(bytes_.data() + g.offset, g.length) == g.crc32c ? good : bad;
-				state_[i].store(s, std::memory_order_release);
+		auto it = std::upper_bound(spans_.begin(), spans_.end(), r.offset, [](std::uint64_t at, const span& s) { return at < s.offset + s.length; });
+		for (std::size_t k = std::size_t(it - spans_.begin()); k < spans_.size() && spans_[k].offset < r.offset + r.length; ++k) {
+			const span& s = spans_[k];
+			const std::uint64_t from = r.offset > s.offset ? (r.offset - s.offset) >> s.shift : 0;
+			const std::uint64_t end = std::min(r.offset + r.length, s.offset + s.length) - s.offset;
+			for (std::uint64_t i = from; (i << s.shift) < end; ++i) {
+				auto& state = state_[first_[k] + i];
+				std::uint8_t v = state.load(std::memory_order_acquire);
+				if (v == unknown) {
+					const std::uint64_t at = s.offset + (i << s.shift);
+					const std::uint64_t n = std::min<std::uint64_t>(std::uint64_t(1) << s.shift, s.offset + s.length - at);
+					v = hashes::crc32c(bytes_.data() + at, n) == s.crcs[i] ? good : bad;
+					state.store(v, std::memory_order_release);
+				}
+				if (v == bad) { return false; }
 			}
-			if (s == bad) { return false; }
 		}
 		return true;
 	}
 
-	std::size_t size() const noexcept { return regions_.size(); }
+	std::size_t size() const noexcept { return count_; }
 	// How many regions have been verified good.
 	std::size_t verified() const noexcept {
 		std::size_t n = 0;
-		for (std::size_t i = 0; i < regions_.size(); ++i) { n += state_[i].load(std::memory_order_relaxed) == good; }
+		for (std::size_t i = 0; i < count_; ++i) { n += state_[i].load(std::memory_order_relaxed) == good; }
 		return n;
 	}
 
 private:
+	static std::vector<span> as_spans(const std::vector<region>& regions) {
+		std::vector<span> out;
+		for (const auto& r : regions) {
+			const std::uint8_t shift = std::uint8_t(r.length <= 1 ? 0 : std::bit_width(r.length - 1));
+			out.push_back({r.offset, r.length, shift, {r.crc32c}});
+		}
+		return out;
+	}
 	static constexpr std::uint8_t unknown = 0, good = 1, bad = 2;
 	std::span<const std::byte> bytes_;
-	std::vector<region> regions_;
+	std::vector<span> spans_;
+	std::vector<std::size_t> first_;  // each span's first state index
 	std::unique_ptr<std::atomic<std::uint8_t>[]> state_;
+	std::size_t count_ = 0;
 };
 
 // A backend makes ranges resident: after co_await b.prefetch(f, ranges), reading
