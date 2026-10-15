@@ -1,5 +1,7 @@
 # residency
 
+[![CI](https://github.com/Kronuz/residency/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/residency/actions/workflows/ci.yml)
+
 Read-only file regions for C++20 code that runs on an event loop: map a file, ask
 for the byte ranges a computation is about to read, and `co_await` until they are
 resident, so the loop reads memory instead of blocking on a page fault. Small hot
