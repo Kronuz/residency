@@ -5,6 +5,7 @@
 ```
 residency.hh     file (mmap + views), pinned (verified copies), backend concept, sync_backend.
 test/test.cc     Views and bounds, pinned verification, prefetch from a task, move semantics.
+docs/residency.d2     README diagram; render: d2 --layout elk --sketch --theme 302 docs/residency.d2 docs/residency.svg
 ```
 
 ## Invariants

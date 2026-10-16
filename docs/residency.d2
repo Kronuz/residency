@@ -1,0 +1,15 @@
+# residency: prefetch, then read memory. Render: d2 --layout elk --sketch --theme 302 docs/residency.d2 docs/residency.svg
+direction: right
+loop: "event loop task" {shape: hexagon}
+backend: "backend.prefetch(file, ranges)\n(sync: madvise WILLNEED)"
+file: "mapped file" {
+  r1: "range" {style.fill: "#e6f4ea"}
+  r2: "range" {style.fill: "#e6f4ea"}
+  cold: "not needed" {style.stroke-dash: 3}
+}
+pinned: "pinned copy\nCRC-32C verified" {shape: stored_data}
+loop -> backend: "co_await"
+backend -> file.r1
+backend -> file.r2
+file.r1 -> loop: "view(range): no fault" {style.stroke-dash: 3}
+file -> pinned: "pinned::copy"
