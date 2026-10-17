@@ -5,8 +5,8 @@ include(FetchContent)
 
 # --- Dependencies: task (coroutines) and hashes (CRC-32C) ---
 set(TASK_ASIO OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(task GIT_REPOSITORY https://github.com/Kronuz/task.git GIT_TAG c3c30e49212769e1bbf424517003150de3f20682)
-FetchContent_Declare(hashes GIT_REPOSITORY https://github.com/Kronuz/hashes.git GIT_TAG 32c49913e5287884518152d28c712f83dafef413)
+FetchContent_Declare(task GIT_REPOSITORY https://github.com/Kronuz/task.git GIT_TAG bbb2e14aecb0fe49bcfac2685d64408ef6177c23)
+FetchContent_Declare(hashes GIT_REPOSITORY https://github.com/Kronuz/hashes.git GIT_TAG 7ab0c23325debfbaf4104044987ba6583d14808f)
 FetchContent_MakeAvailable(task hashes)
 
 # Header-only: residency.hh is the whole implementation.
