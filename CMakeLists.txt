@@ -3,17 +3,17 @@ project(residency LANGUAGES CXX)
 
 include(FetchContent)
 
-# --- Dependencies: task (coroutines) and hashes (CRC-32C) ---
+# --- Dependencies: task (coroutines) and crc32c (CRC-32C) ---
 set(TASK_ASIO OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(task GIT_REPOSITORY https://github.com/Kronuz/task.git GIT_TAG bbb2e14aecb0fe49bcfac2685d64408ef6177c23)
-FetchContent_Declare(hashes GIT_REPOSITORY https://github.com/Kronuz/hashes.git GIT_TAG 7ab0c23325debfbaf4104044987ba6583d14808f)
-FetchContent_MakeAvailable(task hashes)
+FetchContent_Declare(crc32c GIT_REPOSITORY https://github.com/Kronuz/crc32c.git GIT_TAG 04737c35c6b22f6edf4942757c7b2da084f7bd81)
+FetchContent_MakeAvailable(task crc32c)
 
 # Header-only: residency.hh is the whole implementation.
 add_library(residency INTERFACE)
 target_include_directories(residency INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(residency INTERFACE cxx_std_20)
-target_link_libraries(residency INTERFACE task::task hashes::hashes)
+target_link_libraries(residency INTERFACE task::task crc32c::crc32c)
 add_library(residency::residency ALIAS residency)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

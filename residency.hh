@@ -36,7 +36,7 @@
 
 #pragma once
 
-#include "crc32c.hh"
+#include <crc32c/crc32c.hh>
 #include "task.hh"
 
 #include <algorithm>
@@ -140,7 +140,7 @@ public:
 		auto bytes = f.view(r);
 		pinned p;
 		p.bytes_.assign(bytes.begin(), bytes.end());
-		if (hashes::crc32c(p.bytes_.data(), p.bytes_.size()) != expected_crc32c) {
+		if (::kronuz::crc32c::crc32c(p.bytes_.data(), p.bytes_.size()) != expected_crc32c) {
 			throw std::runtime_error("residency: checksum mismatch in pinned region");
 		}
 		return p;
@@ -205,7 +205,7 @@ public:
 				if (v == unknown) {
 					const std::uint64_t at = s.offset + (i << s.shift);
 					const std::uint64_t n = std::min<std::uint64_t>(std::uint64_t(1) << s.shift, s.offset + s.length - at);
-					v = hashes::crc32c(bytes_.data() + at, n) == s.crcs[i] ? good : bad;
+					v = ::kronuz::crc32c::crc32c(bytes_.data() + at, n) == s.crcs[i] ? good : bad;
 					state.store(v, std::memory_order_release);
 				}
 				if (v == bad) { return false; }

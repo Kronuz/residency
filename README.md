@@ -9,8 +9,7 @@ Read-only file regions for C++20 code that runs on an event loop: map a file, as
 for the byte ranges a computation is about to read, and `co_await` until they are
 resident, so the loop reads memory instead of blocking on a page fault. Small hot
 regions can be pinned into owned memory and checksum-verified. Header-only; depends
-on [task](https://github.com/Kronuz/task) and [hashes](https://github.com/Kronuz/hashes)
-(CRC-32C).
+on [task](https://github.com/Kronuz/task) and [crc32c](https://github.com/Kronuz/crc32c).
 
 ![residency: co_await prefetch makes byte ranges resident before the loop reads them](docs/residency.svg)
 

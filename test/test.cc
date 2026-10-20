@@ -2,6 +2,8 @@
 // prefetch through the synchronous backend from a task.
 #include "residency.hh"
 
+#include <crc32c/crc32c.hh>
+
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -38,7 +40,7 @@ int main() {
 	CHECK(threw);
 	CHECK(f.view({data.size(), 0}).empty());
 
-	auto crc = hashes::crc32c(data.data() + 4096, 8192);
+	auto crc = ::kronuz::crc32c::crc32c(data.data() + 4096, 8192);
 	auto p = residency::pinned::copy(f, {4096, 8192}, crc);
 	CHECK(p.bytes().size() == 8192);
 	CHECK(std::memcmp(p.bytes().data(), data.data() + 4096, 8192) == 0);
@@ -59,7 +61,7 @@ int main() {
 		std::vector<residency::verified_regions::region> regions;
 		for (std::uint64_t at = 0; at < 300000; at += 65536) {
 			const std::uint64_t n = std::min<std::uint64_t>(65536, 300000 - at);
-			regions.push_back({at, n, hashes::crc32c(bytes.data() + at, n)});
+			regions.push_back({at, n, ::kronuz::crc32c::crc32c(bytes.data() + at, n)});
 		}
 		bytes[200000] ^= std::byte{1};  // region 3 (196608..262143)
 		residency::verified_regions v(bytes, regions);
@@ -79,8 +81,8 @@ int main() {
 		// The same bytes as spans of equal regions: one span of 4 KiB regions, one of 64 KiB.
 		std::vector<std::uint32_t> small, large;
 		bytes[200000] ^= std::byte{1};  // checksums of the good bytes
-		for (std::uint64_t at = 0; at < 100000; at += 4096) { small.push_back(hashes::crc32c(bytes.data() + at, std::min<std::uint64_t>(4096, 100000 - at))); }
-		for (std::uint64_t at = 100000; at < 300000; at += 65536) { large.push_back(hashes::crc32c(bytes.data() + at, std::min<std::uint64_t>(65536, 300000 - at))); }
+		for (std::uint64_t at = 0; at < 100000; at += 4096) { small.push_back(::kronuz::crc32c::crc32c(bytes.data() + at, std::min<std::uint64_t>(4096, 100000 - at))); }
+		for (std::uint64_t at = 100000; at < 300000; at += 65536) { large.push_back(::kronuz::crc32c::crc32c(bytes.data() + at, std::min<std::uint64_t>(65536, 300000 - at))); }
 		bytes[200000] ^= std::byte{1};  // then corrupted again
 		residency::verified_regions s(bytes, std::vector<residency::verified_regions::span>{{0, 100000, 12, small}, {100000, 200000, 16, large}});
 		CHECK(s.size() == small.size() + large.size() && s.verified() == 0);
@@ -109,7 +111,7 @@ int main() {
 				residency::verified_regions::span sp{at, len, shift, {}};
 				for (std::uint64_t o = 0; o < len; o += std::uint64_t(1) << shift) {
 					const std::uint64_t n = std::min<std::uint64_t>(std::uint64_t(1) << shift, len - o);
-					sp.crcs.push_back(hashes::crc32c(bytes.data() + at + o, n));
+					sp.crcs.push_back(::kronuz::crc32c::crc32c(bytes.data() + at + o, n));
 					model.push_back({at + o, n, r() % 40 == 0});
 				}
 				spans.push_back(std::move(sp));
