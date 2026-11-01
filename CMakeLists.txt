@@ -5,7 +5,7 @@ include(FetchContent)
 
 # --- Dependencies: task (coroutines) and crc32c (CRC-32C) ---
 set(TASK_ASIO OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(task GIT_REPOSITORY https://github.com/Kronuz/task.git GIT_TAG bbb2e14aecb0fe49bcfac2685d64408ef6177c23)
+FetchContent_Declare(task GIT_REPOSITORY https://github.com/Kronuz/task.git GIT_TAG 0b404283948619a8bbd15b63b48ee8372c410081)
 FetchContent_Declare(crc32c GIT_REPOSITORY https://github.com/Kronuz/crc32c.git GIT_TAG 04737c35c6b22f6edf4942757c7b2da084f7bd81)
 FetchContent_MakeAvailable(task crc32c)
 
