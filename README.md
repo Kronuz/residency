@@ -7,86 +7,108 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 ![Header-only](https://img.shields.io/badge/header--only-yes-green.svg)
 
-Read-only file regions for C++20 code that runs on an event loop: map a file, ask
-for the byte ranges a computation is about to read, and `co_await` until they are
-resident, so the loop reads memory instead of blocking on a page fault. Small hot
-regions can be pinned into owned memory and checksum-verified. Header-only; depends
-on [task](https://github.com/Kronuz/task) and [crc32c](https://github.com/Kronuz/crc32c).
-
-![residency: co_await prefetch makes byte ranges resident before the loop reads them](docs/residency.svg)
+Resident file regions for C++20 event loops: mmap views, prefetch as a coroutine, and CRC-32C
+verified pinned copies. Map a file, ask a backend for the byte ranges a computation is about to
+read, and `co_await` until they are resident, so the loop reads memory instead of blocking on a
+page fault. Reach for it when event-loop code reads index segments or posting lists from mapped
+files.
 
 ## ✨ Highlights
 
-- `residency::file`: a read-only memory mapping with bounds-checked `view(range)`.
-- `residency::pinned::copy(file, range, crc32c)`: copies a region into owned memory
-  and verifies its CRC-32C, throwing on a mismatch. For structures that must never
-  fault or be read corrupt: term indexes, skip data, document lengths.
-- `residency::verified_regions(bytes, regions)`: checksummed regions of mapped bytes;
-  `verify(range)` checks each region it overlaps the first time any read touches it
-  (one atomic state per region) and returns false on a mismatch, then and after.
-- `residency::backend`: the concept every backend implements,
-  `task::task<void> prefetch(const file&, std::span<const range>)`.
-- `residency::sync_backend`: advises the kernel (`madvise(MADV_WILLNEED)`) and returns
-  without suspending. It is the only backend shipped so far; asynchronous ones
-  (io_uring on Linux, POSIX AIO on macOS) are planned against the same concept.
-
-## 📦 Installation
-
-Requires a C++20 compiler; CMake 3.14 or newer for the CMake route. CI builds it on
-Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan, and TSan
-builds.
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(residency
-  GIT_REPOSITORY https://github.com/Kronuz/residency.git
-  GIT_TAG        main)
-FetchContent_MakeAvailable(residency)
-
-target_link_libraries(my_app PRIVATE residency::residency)
-```
+- **Read-only mappings.** `residency::file` maps a file and hands out bounds-checked
+  `view(range)` spans.
+- **Prefetch as a task.** A backend's `prefetch(file, ranges)` returns a `task::task<void>`; the
+  caller `co_await`s it and reads the ranges after it resumes.
+- **Pluggable backends.** `residency::backend` is the concept a backend implements.
+  `sync_backend` advises the kernel (`madvise(MADV_WILLNEED)`) and returns without suspending; an
+  asynchronous backend plugs in through the same concept.
+- **Pinned copies.** `pinned::copy(file, range, crc32c)` copies a region into owned memory and
+  throws on a CRC-32C mismatch, for structures that must never fault or be read corrupt: term
+  indexes, skip data, document lengths.
+- **Verified on first touch.** `verified_regions` holds the CRC-32C of each region of mapped
+  bytes; `verify(range)` checks every region the range overlaps the first time a read touches
+  it, with one atomic state per region, and returns false on a mismatch from then on.
 
 ## 🚀 Quick start
 
 ```cpp
 #include "residency.hh"
 
-auto f = residency::file::open("segment.sx");
+#include <cstdio>
+#include <fstream>
+#include <string>
+#include <vector>
+
 residency::sync_backend io;
 
-task::task<std::uint64_t> evaluate(const residency::file& f, std::vector<residency::range> postings) {
-    co_await io.prefetch(f, postings);   // resident (as far as the backend promises)
-    std::uint64_t n = 0;
-    for (auto r : postings) { n += f.view(r).size(); }
-    co_return n;
+task::task<std::uint64_t> sum_lengths(const residency::file& f, std::vector<residency::range> ranges) {
+	co_await io.prefetch(f, ranges);  // resident, as far as the backend promises
+	std::uint64_t n = 0;
+	for (auto r : ranges) { n += f.view(r).size(); }  // reads memory; view() checks bounds
+	co_return n;
 }
+
+int main() {
+	std::ofstream("segment.bin", std::ios::binary) << std::string(65536, 'x');
+	auto f = residency::file::open("segment.bin");
+
+	task::inline_scheduler loop;
+	std::printf("%llu\n", (unsigned long long)task::run(loop, sum_lengths(f, {{0, 4096}, {8192, 100}})));
+	// 4196
+}
+```
+
+## 📦 Installation
+
+Requires a C++20 compiler, a POSIX system (`mmap`, `madvise`), and CMake 3.14 or newer. CMake
+fetches [task](https://github.com/Kronuz/task) and [crc32c](https://github.com/Kronuz/crc32c) at
+pinned commits. CI builds and tests it on Linux (x86_64 with GCC and Clang, arm64), macOS (arm64,
+x86_64) and FreeBSD, plus ASan + UBSan and TSan builds.
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(residency
+  GIT_REPOSITORY https://github.com/Kronuz/residency.git
+  GIT_TAG        f4206c7679e0ea1e8f3d04a7b2a8a41df0fa02ad)  # or main to track the tip
+FetchContent_MakeAvailable(residency)
+
+target_link_libraries(my_app PRIVATE residency::residency)
+```
+
+```cpp
+#include "residency.hh"
 ```
 
 ## 🎯 When to use it
 
-- ✅ Event-loop code that reads mapped files: index segments, posting lists.
-- ❌ Writable mappings, or Windows: read-only, POSIX only.
+Event-loop code that reads mapped files and must not stall the loop on a page fault: index
+segments, posting lists, skip data.
 
-### Limits
+Not for:
 
-- The synchronous backend only advises: a first touch can still fault and block.
-- POSIX only (mmap, madvise).
+- Writable mappings: `residency::file` maps read-only.
+- Windows: it needs `mmap` and `madvise`.
+- A hard no-fault guarantee from `sync_backend` alone: it only advises the kernel, so a first
+  touch can still fault and block. Pin the regions that must never fault.
 
 ## 📚 Documentation
 
 - [AGENTS.md](AGENTS.md): repository map and invariants.
+- [Catalog entry](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#residency) in Kronuz
+  C++ Libraries.
 
 ## 🛠️ Building and testing
 
 ```sh
-cmake -S . -B build && cmake --build build && ctest --test-dir build
+cmake -B build && cmake --build build && ctest --test-dir build
 ```
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) first. CI must
-pass on every platform.
+Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) and the catalog's
+[rules of engagement](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#rules-of-engagement)
+first; CI must pass on every platform.
 
 ## 📄 License
 
-MIT, Copyright (c) 2026 Germán Méndez Bravo. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
